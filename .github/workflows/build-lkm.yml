@@ -1,51 +1,40 @@
-name: Build LKM for KernelSU
+name: Build kernelsu.ko (android17-6.18, selinux_hide kprobe fallback)
+
 on:
-  workflow_call:
-    inputs:
-      package_name:
-        description: 'package name of manager'
-        required: false
-        default: ''
-        type: string
-      expected_size:
-        description: 'expected signature size'
-        required: false
-        default: ''
-        type: string
-      expected_hash:
-        description: 'expected signature hash'
-        required: false
-        default: ''
-        type: string
-      version_code:
-        description: 'Consistent KernelSU version code for all module builds'
-        required: false
-        default: ''
-        type: string
-      release_build:
-        description: 'Mark version metadata as a release build'
-        required: false
-        default: false
-        type: boolean
   workflow_dispatch:
+
 jobs:
-  build-lkm:
-    strategy:
-      matrix:
-        kmi:
-          - android12-5.10
-          - android13-5.10
-          - android13-5.15
-          - android14-5.15
-          - android14-6.1
-          - android15-6.6
-          - android16-6.12
-          - android17-6.18
-    uses: ./.github/workflows/ddk-lkm.yml
-    with:
-      kmi: ${{ matrix.kmi }}
-      package_name: ${{ inputs.package_name || '' }}
-      expected_size: ${{ inputs.expected_size || '' }}
-      expected_hash: ${{ inputs.expected_hash || '' }}
-      version_code: ${{ inputs.version_code || '' }}
-      release_build: ${{ inputs.release_build }}
+  build-aarch64:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:android17-6.18-20260828
+      options: --privileged
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Fetch SukiSU-Ultra and apply patch
+        run: |
+          set -eux
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra "$GITHUB_WORKSPACE/src"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/src"
+          cd "$GITHUB_WORKSPACE/src"
+          git checkout 674aa00c18adc3d7ef4069c03018d6194230865a
+          cp "$GITHUB_WORKSPACE/patches/selinux_hide.c" kernel/feature/selinux_hide.c
+          git diff --stat
+
+      - name: Build kernelsu.ko
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE/src/kernel"
+          CONFIG_KSU=m CONFIG_KPM=y CC=clang make KSU_VERSION=41150 KSU_BUILD_REF=release
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp kernelsu.ko "$GITHUB_WORKSPACE/out/android17-6.18_kernelsu.ko"
+          llvm-strip -d "$GITHUB_WORKSPACE/out/android17-6.18_kernelsu.ko"
+          ls -l "$GITHUB_WORKSPACE/out"
+
+      - name: Upload kernelsu.ko
+        uses: actions/upload-artifact@v7
+        with:
+          name: kernelsu-android17-6.18-aarch64
+          path: out/android17-6.18_kernelsu.ko
