@@ -37,17 +37,26 @@ jobs:
           echo "versionCode=${code:-<unresolved, Kbuild will compute it>}"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch SukiSU-Ultra and apply patch
+      - name: Fetch SukiSU-Ultra and apply patches
         run: |
           set -eux
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra "$GITHUB_WORKSPACE/src"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/src"
           cd "$GITHUB_WORKSPACE/src"
           git checkout "${{ inputs.ref }}"
-          if ! git apply -v "$GITHUB_WORKSPACE/patches/01-selinux_hide-kprobe.patch"; then
-            echo "::error::patch does not apply to ${GITHUB_SHA} - kernel/feature/selinux_hide.c changed upstream, regenerate the patch"
+          shopt -s nullglob
+          patches=("$GITHUB_WORKSPACE"/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "::error::no patches/*.patch in this repository"
             exit 1
           fi
+          for p in "${patches[@]}"; do
+            echo "applying $p"
+            if ! git apply -v "$p"; then
+              echo "::error::$p does not apply - its target file changed upstream, regenerate that patch"
+              exit 1
+            fi
+          done
           git diff --stat
 
       - name: Build kernelsu.ko
