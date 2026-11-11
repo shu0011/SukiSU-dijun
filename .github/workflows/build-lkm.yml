@@ -2,6 +2,12 @@ name: Build kernelsu.ko (android17-6.18, selinux_hide kprobe fallback)
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'SukiSU-Ultra branch/tag/commit to build'
+        required: false
+        default: 'main'
+        type: string
 
 jobs:
   build-aarch64:
@@ -13,21 +19,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Resolve manager versionCode from the latest release
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          code=""
+          json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest || true)
+          if [ -n "$json" ]; then
+            code=$(printf '%s' "$json" \
+              | grep -oE 'SukiSU_v[^"]*_[0-9]+-release\.apk' \
+              | head -1 \
+              | sed -E 's/.*_([0-9]+)-release\.apk/\1/' || true)
+          fi
+          echo "versionCode=${code:-<unresolved, Kbuild will compute it>}"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
       - name: Fetch SukiSU-Ultra and apply patch
         run: |
           set -eux
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra "$GITHUB_WORKSPACE/src"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/src"
           cd "$GITHUB_WORKSPACE/src"
-          git checkout 674aa00c18adc3d7ef4069c03018d6194230865a
-          cp "$GITHUB_WORKSPACE/patches/selinux_hide.c" kernel/feature/selinux_hide.c
+          git checkout "${{ inputs.ref }}"
+          if ! git apply -v "$GITHUB_WORKSPACE/patches/01-selinux_hide-kprobe.patch"; then
+            echo "::error::patch does not apply to ${GITHUB_SHA} - kernel/feature/selinux_hide.c changed upstream, regenerate the patch"
+            exit 1
+          fi
           git diff --stat
 
       - name: Build kernelsu.ko
+        env:
+          VERSION_CODE: ${{ steps.ver.outputs.code }}
         run: |
           set -eux
           cd "$GITHUB_WORKSPACE/src/kernel"
-          CONFIG_KSU=m CONFIG_KPM=y CC=clang make KSU_VERSION=41150 KSU_BUILD_REF=release
+          EXTRA=""
+          if [ -n "$VERSION_CODE" ]; then
+            EXTRA="KSU_VERSION=$VERSION_CODE"
+          fi
+          CONFIG_KSU=m CONFIG_KPM=y CC=clang make $EXTRA KSU_BUILD_REF=release
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp kernelsu.ko "$GITHUB_WORKSPACE/out/android17-6.18_kernelsu.ko"
           llvm-strip -d "$GITHUB_WORKSPACE/out/android17-6.18_kernelsu.ko"
